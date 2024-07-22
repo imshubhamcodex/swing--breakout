@@ -1,0 +1,199 @@
+//@version=5
+indicator("Marked Candles", overlay=true, max_labels_count=500, max_bars_back=5000)
+
+
+// Params
+u_wick_threshold = input.int(4, title="Upper Wick Threshold")
+l_wick_threshold = input.int(4, title="Lower Wick Threshold")
+buffer_window = input.int(4, title="Buffer Window")
+wick_diff = input.float(2.0, title="Wick Difference")
+st = input.int(30, title="Swing Threshold")
+stt = input.int(15, title="Swing Test Threshold")
+
+// Create an array to store test candles
+test_candles_arr = array.new_int()
+mark_candles_arr_up = array.new_int()
+test_candles_arr_origin_up = array.new_int()
+trigger_candles_arr_up = array.new_int()
+mark_candles_arr_down = array.new_int()
+test_candles_arr_origin_down = array.new_int()
+trigger_candles_arr_down = array.new_int()
+
+
+// Detect swing
+f_detect_swing(test_candle_index, marked_candle_index, swing_threshold) =>
+    length = test_candle_index - marked_candle_index + 1
+    if length <= 0  // Ensure that the length is positive
+        false
+    else
+        // Initialize swing_high and swing_low with extreme values
+        swing_high = low[marked_candle_index]
+        swing_low = high[marked_candle_index]
+        
+        // Loop through the range to find the highest high and lowest low
+        for i = 0 to length - 1
+            current_index = marked_candle_index + i
+            if high[current_index] > swing_high
+                swing_high := high[current_index]
+            if low[current_index] < swing_low
+                swing_low := low[current_index]
+        
+        // Calculate the swing and compare with the threshold
+        swing = swing_high - swing_low
+        swing > swing_threshold
+
+
+if barstate.islast
+    // To calculate upper and lower wick values
+    lookback = 4000
+    for i = lookback to 0 
+        upper_wick = high[i] - math.max(open[i], close[i])
+        lower_wick = math.min(open[i], close[i]) - low[i]
+        if upper_wick > u_wick_threshold or lower_wick > l_wick_threshold
+            array.push(test_candles_arr, i)
+
+
+    for b_index in test_candles_arr
+        b_idx = b_index
+        upper_wick = high[b_idx] - math.max(open[b_idx], close[b_idx])
+        lower_wick = math.min(open[b_idx], close[b_idx]) - low[b_idx]
+
+        if b_idx <= 0
+            break
+            
+        is_found_mark = false
+        marked_idx = -1
+        for j = b_idx - 1 to 0
+            if high[b_idx] - high[j] < 0 or upper_wick < u_wick_threshold
+                break
+            else if b_idx - j > buffer_window
+                upper_wick_mark = high[j] - math.max(open[j], close[j])
+                if high[b_idx] - high[j] <= wick_diff and high[b_idx] - high[j] > 0 and upper_wick_mark >= u_wick_threshold
+                    array.push(mark_candles_arr_up, j)
+                    array.push(test_candles_arr_origin_up, b_index)
+
+                    is_found_mark := true
+                    marked_idx := j
+                    break
+            
+        if is_found_mark
+            is_swing = f_detect_swing(b_idx, marked_idx, st)
+            if not is_swing
+                array.pop(mark_candles_arr_up)
+                array.pop(test_candles_arr_origin_up)
+
+
+        is_found_mark := false
+        marked_idx := -1
+        for j = b_idx - 1 to 0
+            if low[b_idx] > low[j] or lower_wick < l_wick_threshold
+                break
+            else if b_idx - j > buffer_window
+                lower_wick_mark = math.min(open[j], close[j]) - low[j]
+                if low[j] - low[b_idx] <= wick_diff and low[j] - low[b_idx] > 0 and lower_wick_mark >= l_wick_threshold
+                    array.push(mark_candles_arr_down, j)
+                    array.push(test_candles_arr_origin_down, b_index)
+
+                    is_found_mark := true
+                    marked_idx := j
+                    break
+
+        if is_found_mark
+            is_swing = f_detect_swing(b_idx, marked_idx, st)
+            if not is_swing
+                array.pop(mark_candles_arr_down)
+                array.pop(test_candles_arr_origin_down)
+
+
+    for b_index in mark_candles_arr_up
+        b_idx = b_index
+        if b_idx <= 0
+            break
+
+        is_found_tigger = false
+        tigger_idx = -1
+        for j = b_idx - 1 to 0
+            if high[b_idx] < high[j] and b_idx - j <= buffer_window
+                break
+            else if b_idx - j > buffer_window
+                if high[b_idx] < high[j]
+                    array.push(trigger_candles_arr_up, j)
+                    is_found_tigger := true
+                    tigger_idx := j
+                    break
+            
+        if is_found_tigger
+            is_swing = f_detect_swing(b_idx, tigger_idx, stt)
+            if not is_swing
+                array.pop(trigger_candles_arr_up)
+
+    
+    for b_index in mark_candles_arr_down
+        b_idx = b_index
+        if b_idx <= 0
+            break
+
+        is_found_tigger = false
+        tigger_idx = -1
+        for j = b_idx - 1 to 0
+            if low[b_idx] > low[j] and b_idx - j <= buffer_window
+                break
+            else if b_idx - j > buffer_window
+                if low[b_idx] > low[j]
+                    array.push(trigger_candles_arr_down, j)
+                    is_found_tigger := true
+                    tigger_idx := j
+                    break
+            
+        if is_found_tigger
+            is_swing = f_detect_swing(b_idx, tigger_idx, stt)
+            if not is_swing
+                array.pop(trigger_candles_arr_down)
+    
+  
+
+
+
+    count_idx = 0
+    // for b_index in test_candles_arr_origin_up
+    //     b_low = low[b_index] - 10 
+    //     count_idx += 1
+    //     label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangleup, size=size.tiny, textcolor=color.white, color=color.purple)
+
+    // count_idx := 0 
+    // for b_index in mark_candles_arr_up
+    //     b_low = low[b_index] - 10  
+    //     count_idx += 1
+    //     label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangleup, size=size.tiny, textcolor=color.white, color=color.aqua)
+
+        
+    count_idx := 0 
+    for b_index in trigger_candles_arr_up
+        b_low = low[b_index] - 10  
+        count_idx += 1
+        label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangleup, size=size.tiny, textcolor=color.white, color=color.green)
+
+        
+    // count_idx := 0
+    // for b_index in test_candles_arr_origin_down
+    //     b_low = high[b_index] + 10 
+    //     count_idx += 1
+    //     label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangledown, size=size.tiny, textcolor=color.white, color=color.purple)
+
+    // count_idx := 0 
+    // for b_index in mark_candles_arr_down
+    //     b_low = high[b_index] + 10  // Get the low price of the test candle
+    //     count_idx += 1
+    //     label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangledown, size=size.tiny, textcolor=color.white, color=color.orange)
+
+        
+    count_idx := 0 
+    for b_index in trigger_candles_arr_down
+        b_low = high[b_index] + 10  // Get the low price of the test candle
+        count_idx += 1
+        label.new(bar_index - b_index, b_low, text=str.tostring(count_idx), style=label.style_triangledown, size=size.tiny, textcolor=color.white, color=color.red)
+
+        
+
+
+
